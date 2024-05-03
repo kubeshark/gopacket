@@ -38,7 +38,6 @@ type CaptureInfo struct {
 	// packets this way.
 	AncillaryData []interface{}
 
-	// CgroupID
 	CgroupID uint64
 }
 
@@ -500,7 +499,6 @@ func (p *eagerPacket) LayerClass(lc LayerClass) Layer {
 func (p *eagerPacket) String() string { return p.packetString() }
 func (p *eagerPacket) Dump() string   { return p.packetDump() }
 
-// TODO: vol
 func (p *eagerPacket) CgroupID() uint64 {
 	return p.metadata.CgroupID
 }
@@ -617,7 +615,6 @@ func (p *lazyPacket) LayerClass(lc LayerClass) Layer {
 func (p *lazyPacket) String() string { p.Layers(); return p.packetString() }
 func (p *lazyPacket) Dump() string   { p.Layers(); return p.packetDump() }
 
-// TODO: vol
 func (p *lazyPacket) CgroupID() uint64 {
 	return p.metadata.CgroupID
 }
