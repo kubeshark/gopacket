@@ -237,7 +237,7 @@ type OSPF struct {
 	Content      interface{}
 }
 
-//OSPFv2 extend the OSPF head with version 2 specific fields
+// OSPFv2 extend the OSPF head with version 2 specific fields
 type OSPFv2 struct {
 	BaseLayer
 	OSPF
