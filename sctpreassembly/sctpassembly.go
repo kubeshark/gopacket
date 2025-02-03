@@ -1,23 +1,3 @@
-// Copyright 2012 Google, Inc. All rights reserved.
-//
-// Use of this source code is governed by a BSD-style license
-// that can be found in the LICENSE file in the root of the source
-// tree.
-
-// Package reassembly provides SCTP stream re-assembly.
-//
-// The reassembly package implements uni-directional SCTP reassembly, for use in
-// packet-sniffing applications.  The caller reads packets off the wire, then
-// presents them to an Assembler in the form of gopacket layers.SCTP packets
-// (github.com/kubeshark/gopacket, github.com/kubeshark/gopacket/layers).
-//
-// The Assembler uses a user-supplied
-// StreamFactory to create a user-defined Stream interface, then passes packet
-// data in stream order to that object.  A concurrency-safe StreamPool keeps
-// track of all current Streams being reassembled, so multiple Assemblers may
-// run at once to assemble packets while taking advantage of multiple cores.
-//
-// TODO: Add simplest example
 package sctpreassembly
 
 import (
