@@ -368,9 +368,6 @@ func (sc SCTPData) SerializeTo(b gopacket.SerializeBuffer, opts gopacket.Seriali
 	return nil
 }
 
-// SCTPInitParameter is a parameter for an SCTP Init or InitAck packet.
-type SCTPInitParameter SCTPParameter
-
 // SCTPInit is used as the return value for both SCTPInit and SCTPInitAck
 // messages.
 type SCTPInit struct {
@@ -379,7 +376,7 @@ type SCTPInit struct {
 	AdvertisedReceiverWindowCredit  uint32
 	OutboundStreams, InboundStreams uint16
 	InitialTSN                      uint32
-	Parameters                      []SCTPInitParameter
+	Parameters                      []SCTPParameter
 }
 
 // LayerType returns either gopacket.LayerTypeSCTPInit or gopacket.LayerTypeSCTPInitAck.
@@ -406,7 +403,7 @@ func decodeSCTPInit(data []byte, p gopacket.PacketBuilder) error {
 	}
 	paramData := data[20:sc.ActualLength]
 	for len(paramData) > 0 {
-		p := SCTPInitParameter(decodeSCTPParameter(paramData))
+		p := decodeSCTPParameter(paramData)
 		paramData = paramData[p.ActualLength:]
 		sc.Parameters = append(sc.Parameters, p)
 	}
@@ -517,14 +514,10 @@ func (sc SCTPSack) SerializeTo(b gopacket.SerializeBuffer, opts gopacket.Seriali
 	return nil
 }
 
-// SCTPHeartbeatParameter is the parameter type used by SCTP heartbeat and
-// heartbeat ack layers.
-type SCTPHeartbeatParameter SCTPParameter
-
 // SCTPHeartbeat is the SCTP heartbeat layer, also used for heatbeat ack.
 type SCTPHeartbeat struct {
 	SCTPChunk
-	Parameters []SCTPHeartbeatParameter
+	Parameters []SCTPParameter
 }
 
 // LayerType returns gopacket.LayerTypeSCTPHeartbeat.
@@ -546,7 +539,7 @@ func decodeSCTPHeartbeat(data []byte, p gopacket.PacketBuilder) error {
 	}
 	paramData := data[4:sc.Length]
 	for len(paramData) > 0 {
-		p := SCTPHeartbeatParameter(decodeSCTPParameter(paramData))
+		p := decodeSCTPParameter(paramData)
 		paramData = paramData[p.ActualLength:]
 		sc.Parameters = append(sc.Parameters, p)
 	}
@@ -573,13 +566,10 @@ func (sc SCTPHeartbeat) SerializeTo(b gopacket.SerializeBuffer, opts gopacket.Se
 	return nil
 }
 
-// SCTPErrorParameter is the parameter type used by SCTP Abort and Error layers.
-type SCTPErrorParameter SCTPParameter
-
 // SCTPError is the SCTP error layer, also used for SCTP aborts.
 type SCTPError struct {
 	SCTPChunk
-	Parameters []SCTPErrorParameter
+	Parameters []SCTPParameter
 }
 
 // LayerType returns LayerTypeSCTPAbort or LayerTypeSCTPError.
@@ -602,7 +592,7 @@ func decodeSCTPError(data []byte, p gopacket.PacketBuilder) error {
 	}
 	paramData := data[4:sc.Length]
 	for len(paramData) > 0 {
-		p := SCTPErrorParameter(decodeSCTPParameter(paramData))
+		p := decodeSCTPParameter(paramData)
 		paramData = paramData[p.ActualLength:]
 		sc.Parameters = append(sc.Parameters, p)
 	}
