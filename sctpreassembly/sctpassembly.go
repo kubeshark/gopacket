@@ -741,7 +741,7 @@ func (a *Assembler) AssembleWithContext(packet gopacket.Packet, t *layers.SCTP, 
 
 		action := assemblerAction{
 			nextSeq: Sequence(invalidSequence),
-			queue:   true,
+			queue:   false,
 		}
 		a.dump("AssembleWithContext()", half)
 
