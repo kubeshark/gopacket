@@ -20,16 +20,16 @@ import (
 
 var defaultDebug = false
 
-var debugLog = flag.Bool("assembly_debug_log", defaultDebug, "If true, the github.com/kubeshark/gopacket/reassembly library will log verbose debugging information (at least one line per packet)")
+var debugLog = flag.Bool("sctp_assembly_debug_log", defaultDebug, "If true, the github.com/kubeshark/gopacket/sctpreassembly library will log verbose debugging information (at least one line per packet)")
 
-const invalidSequence = -1
+const invalidSequence = 0
 const uint32Max = 0xFFFFFFFF
 
 // Sequence is a SCTP sequence number.  It provides a few convenience functions
 // for handling SCTP wrap-around.  The sequence should always be in the range
 // [0,0xFFFFFFFF]... its other bits are simply used in wrap-around calculations
 // and should never be set.
-type Sequence int64
+type Sequence uint32
 
 // Difference defines an ordering for comparing SCTP sequences that's safe for
 // roll-overs.  It returns:
@@ -376,10 +376,10 @@ type StreamFactory interface {
 	New(netFlow, sctpFlow gopacket.Flow, sctp *layers.SCTP, ac AssemblerContext) Stream
 }
 
-type key [3]gopacket.Flow
+type key [4]gopacket.Flow
 
 func (k *key) String() string {
-	return fmt.Sprintf("%s:%s@%s", k[0], k[1], k[2])
+	return fmt.Sprintf("%s:%s@%s|%s", k[0], k[1], k[2], k[3])
 }
 
 func (k *key) Reverse() key {
@@ -387,6 +387,7 @@ func (k *key) Reverse() key {
 		k[0].Reverse(),
 		k[1].Reverse(),
 		k[2].Reverse(),
+		k[3].Reverse(),
 	}
 }
 
@@ -626,8 +627,6 @@ type assemblerAction struct {
 //	zero or one call to StreamFactory.New, creating a stream
 //	zero or one call to ReassembledSG on a single stream
 //	zero or one call to ReassemblyComplete on the same stream
-//
-// TODO: Fix for *layers.SCTP
 func (a *Assembler) AssembleWithContext(packet gopacket.Packet, t *layers.SCTP, ac AssemblerContext) {
 	var conn *connection
 	var half *halfconnection
@@ -652,102 +651,107 @@ func (a *Assembler) AssembleWithContext(packet gopacket.Packet, t *layers.SCTP, 
 		}
 	}
 
-	a.ret = a.ret[:0]
-	key := key{netFlow, t.TransportFlow(), vlanFlow}
-	ci := ac.GetCaptureInfo()
-	timestamp := ci.Timestamp
+	var dataChunks []*layers.SCTPData
 
-	conn, half, rev = a.connPool.getConnection(key, false, timestamp, t, ac)
-	if conn == nil {
+	for _, layer := range packet.Layers() {
+		switch layer.LayerType() {
+		case layers.LayerTypeSCTPData:
+			dataChunks = append(dataChunks, packet.Layer(layers.LayerTypeSCTPData).(*layers.SCTPData))
+		default:
+			continue
+			// case layers.LayerTypeSCTPInit:
+			// 	l := packet.Layer(layers.LayerTypeSCTPInit).(*layers.SCTPInit)
+			// case layers.LayerTypeSCTPSack:
+			// 	l := packet.Layer(layers.LayerTypeSCTPSack).(*layers.SCTPSack)
+			// case layers.LayerTypeSCTPHeartbeat:
+			// 	l := packet.Layer(layers.LayerTypeSCTPHeartbeat).(*layers.SCTPHeartbeat)
+			// case layers.LayerTypeSCTPError:
+			// 	l := packet.Layer(layers.LayerTypeSCTPError).(*layers.SCTPError)
+			// case layers.LayerTypeSCTPShutdown:
+			// 	l := packet.Layer(layers.LayerTypeSCTPShutdown).(*layers.SCTPShutdown)
+			// case layers.LayerTypeSCTPCookieEcho:
+			// 	l := packet.Layer(layers.LayerTypeSCTPCookieEcho).(*layers.SCTPCookieEcho)
+			// case layers.LayerTypeSCTPUnknownChunkType:
+			// 	fallthrough
+			// case layers.LayerTypeSCTPShutdownAck:
+			// 	fallthrough
+			// case layers.LayerTypeSCTPEmptyLayer:
+			// 	fallthrough
+			// case layers.LayerTypeSCTPInitAck:
+			// 	fallthrough
+			// case layers.LayerTypeSCTPHeartbeatAck:
+			// 	fallthrough
+			// case layers.LayerTypeSCTPAbort:
+			// 	fallthrough
+			// case layers.LayerTypeSCTPShutdownComplete:
+			// 	fallthrough
+			// case layers.LayerTypeSCTPCookieAck:
+			// 	return
+		}
+	}
+
+	for _, dataChunk := range dataChunks {
+		streamIdBytes := make([]byte, 2)
+		binary.LittleEndian.PutUint16(streamIdBytes, dataChunk.StreamId)
+		sctpFlow := gopacket.NewFlow(layers.EndpointSCTPStream, streamIdBytes, streamIdBytes)
+
+		a.ret = a.ret[:0]
+		key := key{netFlow, t.TransportFlow(), vlanFlow, sctpFlow}
+		ci := ac.GetCaptureInfo()
+		timestamp := ci.Timestamp
+
+		conn, half, rev = a.connPool.getConnection(key, false, timestamp, t, ac)
+		if conn == nil {
+			if *debugLog {
+				log.Printf("%v got empty packet on otherwise empty connection", key)
+			}
+			return
+		}
+		conn.mu.Lock()
+		defer conn.mu.Unlock()
+
+		if half.lastSeen.Before(timestamp) {
+			half.lastSeen = timestamp
+		}
+
+		a.start = half.nextSeq == invalidSequence
 		if *debugLog {
-			log.Printf("%v got empty packet on otherwise empty connection", key)
+			if half.nextSeq < rev.ackSeq {
+				log.Printf("Delay detected on %v, data is acked but not assembled yet (acked %v, nextSeq %v)", key, rev.ackSeq, half.nextSeq)
+			}
 		}
-		return
-	}
-	conn.mu.Lock()
-	defer conn.mu.Unlock()
 
-	if half.lastSeen.Before(timestamp) {
-		half.lastSeen = timestamp
-	}
-	a.start = half.nextSeq == invalidSequence && t.SYN
-	if *debugLog {
-		if half.nextSeq < rev.ackSeq {
-			log.Printf("Delay detected on %v, data is acked but not assembled yet (acked %v, nextSeq %v)", key, rev.ackSeq, half.nextSeq)
+		if !half.stream.Accept(t, ci, half.dir, half.nextSeq, &a.start, ac) {
+			if *debugLog {
+				log.Printf("Ignoring packet")
+			}
+			return
 		}
-	}
+		if half.closed {
+			// this way is closed
+			if *debugLog {
+				log.Printf("%v got packet on closed half", key)
+			}
+			return
+		}
 
-	if !half.stream.Accept(t, ci, half.dir, half.nextSeq, &a.start, ac) {
+		half.stream.ReceivePacket(packet, t, half.dir)
+
+		seq, bytes := Sequence(dataChunk.TSN), dataChunk.Payload
+
+		action := assemblerAction{
+			nextSeq: Sequence(invalidSequence),
+			queue:   true,
+		}
+		a.dump("AssembleWithContext()", half)
+
+		action = a.handleBytes(bytes, seq, half, dataChunk.BeginFragment, dataChunk.EndFragment, action, ac)
+		if len(a.ret) > 0 {
+			action.nextSeq = a.sendToConnection(conn, half, ac)
+		}
 		if *debugLog {
-			log.Printf("Ignoring packet")
+			log.Printf("%v nextSeq:%d", key, half.nextSeq)
 		}
-		return
-	}
-	if half.closed {
-		// this way is closed
-		if *debugLog {
-			log.Printf("%v got packet on closed half", key)
-		}
-		return
-	}
-
-	half.stream.ReceivePacket(packet, t, half.dir)
-
-	seq, ack, bytes := Sequence(t.Seq), Sequence(t.Ack), t.Payload
-	if t.ACK {
-		half.ackSeq = ack
-	}
-	// TODO: push when Ack is seen ??
-	action := assemblerAction{
-		nextSeq: Sequence(invalidSequence),
-		queue:   true,
-	}
-	a.dump("AssembleWithContext()", half)
-	if half.nextSeq == invalidSequence {
-		if t.SYN {
-			if *debugLog {
-				log.Printf("%v saw first SYN packet, returning immediately, seq=%v", key, seq)
-			}
-			seq = seq.Add(1)
-			half.nextSeq = seq
-			action.queue = false
-		} else if a.start {
-			if *debugLog {
-				log.Printf("%v start forced", key)
-			}
-			half.nextSeq = seq
-			action.queue = false
-		} else {
-			if *debugLog {
-				log.Printf("%v waiting for start, storing into connection", key)
-			}
-		}
-	} else {
-		diff := half.nextSeq.Difference(seq)
-		if diff > 0 {
-			if *debugLog {
-				log.Printf("%v gap in sequence numbers (%v, %v) diff %v, storing into connection", key, half.nextSeq, seq, diff)
-			}
-		} else {
-			if *debugLog {
-				log.Printf("%v found contiguous data (%v, %v), returning immediately: len:%d", key, seq, half.nextSeq, len(bytes))
-			}
-			action.queue = false
-		}
-	}
-
-	action = a.handleBytes(bytes, seq, half, t.SYN, t.RST || t.FIN, action, ac)
-	if len(a.ret) > 0 {
-		action.nextSeq = a.sendToConnection(conn, half, ac)
-	}
-	if action.nextSeq != invalidSequence {
-		half.nextSeq = action.nextSeq
-		if t.FIN {
-			half.nextSeq = half.nextSeq.Add(1)
-		}
-	}
-	if *debugLog {
-		log.Printf("%v nextSeq:%d", key, half.nextSeq)
 	}
 }
 

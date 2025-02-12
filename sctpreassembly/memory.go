@@ -9,7 +9,7 @@ import (
 	"github.com/kubeshark/gopacket/layers"
 )
 
-var memLog = flag.Bool("assembly_memuse_log", defaultDebug, "If true, the github.com/kubeshark/gopacket/reassembly library will log information regarding its memory use every once in a while.")
+var memLog = flag.Bool("sctp_assembly_memuse_log", defaultDebug, "If true, the github.com/kubeshark/gopacket/sctpreassembly library will log information regarding its memory use every once in a while.")
 
 /*
  * pageCache

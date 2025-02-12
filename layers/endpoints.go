@@ -46,7 +46,8 @@ var (
 	EndpointPPP = gopacket.RegisterEndpointType(9, gopacket.EndpointTypeMetadata{Name: "PPP", Formatter: func([]byte) string {
 		return "point"
 	}})
-	EndpointVLAN = gopacket.RegisterEndpointType(10, gopacket.EndpointTypeMetadata{Name: "VLAN", Formatter: nil})
+	EndpointVLAN       = gopacket.RegisterEndpointType(10, gopacket.EndpointTypeMetadata{Name: "VLAN", Formatter: nil})
+	EndpointSCTPStream = gopacket.RegisterEndpointType(11, gopacket.EndpointTypeMetadata{Name: "VLAN", Formatter: nil})
 )
 
 // NewIPEndpoint creates a new IP (v4 or v6) endpoint from a net.IP address.
