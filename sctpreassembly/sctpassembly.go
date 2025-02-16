@@ -22,7 +22,7 @@ var defaultDebug = false
 
 var debugLog = flag.Bool("sctp_assembly_debug_log", defaultDebug, "If true, the github.com/kubeshark/gopacket/sctpreassembly library will log verbose debugging information (at least one line per packet)")
 
-const invalidSequence = 0
+const initialTSN = 0
 const uint32Max = 0xFFFFFFFF
 
 // Sequence is a SCTP sequence number.  It provides a few convenience functions
@@ -82,7 +82,7 @@ type ScatterGather interface {
 	// Return CaptureInfo of packet corresponding to given offset
 	CaptureInfo(offset int) gopacket.CaptureInfo
 	// Return some info about the reassembled chunks
-	Info() (direction SCTPFlowDirection, start bool, end bool, skip int)
+	Info() (direction SCTPFlowDirection, start bool, end bool)
 	// Return some stats regarding the state of the stream
 	Stats() SCTPAssemblyStats
 }
@@ -104,7 +104,6 @@ type byteContainer interface {
 // Implements a ScatterGather
 type reassemblyObject struct {
 	all       []byteContainer
-	Skip      int
 	Direction SCTPFlowDirection
 	saved     int
 	toKeep    int
@@ -154,8 +153,8 @@ func (rl *reassemblyObject) CaptureInfo(offset int) gopacket.CaptureInfo {
 	return gopacket.CaptureInfo{}
 }
 
-func (rl *reassemblyObject) Info() (SCTPFlowDirection, bool, bool, int) {
-	return rl.Direction, rl.all[0].isStart(), rl.all[len(rl.all)-1].isEnd(), rl.Skip
+func (rl *reassemblyObject) Info() (SCTPFlowDirection, bool, bool) {
+	return rl.Direction, rl.all[0].isStart(), rl.all[len(rl.all)-1].isEnd()
 }
 
 func (rl *reassemblyObject) Stats() SCTPAssemblyStats {
@@ -396,11 +395,10 @@ const assemblerReturnValueInitialSize = 16
 /* one-way connection, i.e. halfconnection */
 type halfconnection struct {
 	dir               SCTPFlowDirection
-	pages             int      // Number of pages used (both in first/last and saved)
-	saved             *page    // Doubly-linked list of in-order pages (seq < nextSeq) already given to Stream who told us to keep
-	first, last       *page    // Doubly-linked list of out-of-order pages (seq > nextSeq)
-	nextSeq           Sequence // sequence number of in-order received bytes
-	ackSeq            Sequence
+	pages             int   // Number of pages used (both in first/last and saved)
+	saved             *page // Doubly-linked list of in-order pages (seq < nextSeq) already given to Stream who told us to keep
+	first, last       *page // Doubly-linked list of out-of-order pages (seq > nextSeq)
+	currentTSN        Sequence
 	created, lastSeen time.Time
 	stream            Stream
 	closed            bool
@@ -422,10 +420,9 @@ func (half *halfconnection) String() string {
 // Dump returns a string (crypticly) describing the halfconnction
 func (half *halfconnection) Dump() string {
 	s := fmt.Sprintf("pages: %d\n"+
-		"nextSeq: %d\n"+
-		"ackSeq: %d\n"+
+		"current TSN: %d\n"+
 		"Seen :  %s\n"+
-		"dir:    %s\n", half.pages, half.nextSeq, half.ackSeq, half.lastSeen, half.dir)
+		"dir:    %s\n", half.pages, half.currentTSN, half.lastSeen, half.dir)
 	nb := 0
 	for p := half.first; p != nil; p = p.next {
 		s += fmt.Sprintf("	Page[%d] %s len: %d\n", nb, p, len(p.bytes))
@@ -445,11 +442,10 @@ type connection struct {
 func (c *connection) reset(k key, s Stream, ts time.Time) {
 	c.key = k
 	base := halfconnection{
-		nextSeq:  invalidSequence,
-		ackSeq:   invalidSequence,
-		created:  ts,
-		lastSeen: ts,
-		stream:   s,
+		currentTSN: initialTSN,
+		created:    ts,
+		lastSeen:   ts,
+		stream:     s,
 	}
 	c.c2s, c.s2c = base, base
 	c.c2s.dir, c.s2c.dir = SCTPDirClientToServer, SCTPDirServerToClient
@@ -630,7 +626,6 @@ type assemblerAction struct {
 func (a *Assembler) AssembleWithContext(packet gopacket.Packet, t *layers.SCTP, ac AssemblerContext) {
 	var conn *connection
 	var half *halfconnection
-	var rev *halfconnection
 	netFlow := packet.NetworkLayer().NetworkFlow()
 
 	var vlanFlow gopacket.Flow
@@ -659,34 +654,6 @@ func (a *Assembler) AssembleWithContext(packet gopacket.Packet, t *layers.SCTP, 
 			dataChunks = append(dataChunks, packet.Layer(layers.LayerTypeSCTPData).(*layers.SCTPData))
 		default:
 			continue
-			// case layers.LayerTypeSCTPInit:
-			// 	l := packet.Layer(layers.LayerTypeSCTPInit).(*layers.SCTPInit)
-			// case layers.LayerTypeSCTPSack:
-			// 	l := packet.Layer(layers.LayerTypeSCTPSack).(*layers.SCTPSack)
-			// case layers.LayerTypeSCTPHeartbeat:
-			// 	l := packet.Layer(layers.LayerTypeSCTPHeartbeat).(*layers.SCTPHeartbeat)
-			// case layers.LayerTypeSCTPError:
-			// 	l := packet.Layer(layers.LayerTypeSCTPError).(*layers.SCTPError)
-			// case layers.LayerTypeSCTPShutdown:
-			// 	l := packet.Layer(layers.LayerTypeSCTPShutdown).(*layers.SCTPShutdown)
-			// case layers.LayerTypeSCTPCookieEcho:
-			// 	l := packet.Layer(layers.LayerTypeSCTPCookieEcho).(*layers.SCTPCookieEcho)
-			// case layers.LayerTypeSCTPUnknownChunkType:
-			// 	fallthrough
-			// case layers.LayerTypeSCTPShutdownAck:
-			// 	fallthrough
-			// case layers.LayerTypeSCTPEmptyLayer:
-			// 	fallthrough
-			// case layers.LayerTypeSCTPInitAck:
-			// 	fallthrough
-			// case layers.LayerTypeSCTPHeartbeatAck:
-			// 	fallthrough
-			// case layers.LayerTypeSCTPAbort:
-			// 	fallthrough
-			// case layers.LayerTypeSCTPShutdownComplete:
-			// 	fallthrough
-			// case layers.LayerTypeSCTPCookieAck:
-			// 	return
 		}
 	}
 
@@ -700,7 +667,7 @@ func (a *Assembler) AssembleWithContext(packet gopacket.Packet, t *layers.SCTP, 
 		ci := ac.GetCaptureInfo()
 		timestamp := ci.Timestamp
 
-		conn, half, rev = a.connPool.getConnection(key, false, timestamp, t, ac)
+		conn, half = a.connPool.getConnection(key, false, timestamp, t, ac)
 		if conn == nil {
 			if *debugLog {
 				log.Printf("%v got empty packet on otherwise empty connection", key)
@@ -714,14 +681,8 @@ func (a *Assembler) AssembleWithContext(packet gopacket.Packet, t *layers.SCTP, 
 			half.lastSeen = timestamp
 		}
 
-		a.start = half.nextSeq == invalidSequence
-		if *debugLog {
-			if half.nextSeq < rev.ackSeq {
-				log.Printf("Delay detected on %v, data is acked but not assembled yet (acked %v, nextSeq %v)", key, rev.ackSeq, half.nextSeq)
-			}
-		}
-
-		if !half.stream.Accept(t, ci, half.dir, half.nextSeq, &a.start, ac) {
+		a.start = dataChunk.BeginFragment
+		if !half.stream.Accept(t, ci, half.dir, half.currentTSN, &a.start, ac) {
 			if *debugLog {
 				log.Printf("Ignoring packet")
 			}
@@ -737,170 +698,48 @@ func (a *Assembler) AssembleWithContext(packet gopacket.Packet, t *layers.SCTP, 
 
 		half.stream.ReceivePacket(packet, t, half.dir)
 
-		seq, bytes := Sequence(dataChunk.TSN), dataChunk.Payload
+		tsn, bytes := Sequence(dataChunk.TSN), dataChunk.Payload
 
 		action := assemblerAction{
-			nextSeq: Sequence(invalidSequence),
-			queue:   false,
+			nextSeq: Sequence(initialTSN),
+			queue:   true,
 		}
 		a.dump("AssembleWithContext()", half)
+		if half.currentTSN == initialTSN {
+			if a.start {
+				if *debugLog {
+					log.Printf("%v start forced", key)
+				}
+				half.currentTSN = tsn
+				action.queue = false
+			} else {
+				if *debugLog {
+					log.Printf("%v waiting for start, storing into connection", key)
+				}
+			}
+		} else {
+			diff := half.currentTSN.Difference(tsn)
+			if diff > 0 {
+				if *debugLog {
+					log.Printf("%v gap in sequence numbers (%v, %v) diff %v, storing into connection", key, half.currentTSN, tsn, diff)
+				}
+			} else {
+				if *debugLog {
+					log.Printf("%v found contiguous data (%v, %v), returning immediately: len:%d", key, tsn, half.currentTSN, len(bytes))
+				}
+				action.queue = false
+			}
+		}
 
-		action = a.handleBytes(bytes, seq, half, dataChunk.BeginFragment, dataChunk.EndFragment, action, ac)
+		action = a.handleBytes(bytes, tsn, half, dataChunk.BeginFragment, dataChunk.EndFragment, action, ac)
 		if len(a.ret) > 0 {
-			action.nextSeq = a.sendToConnection(conn, half, ac)
+			a.sendToConnection(conn, half, ac)
+			half.currentTSN = tsn
 		}
 		if *debugLog {
-			log.Printf("%v nextSeq:%d", key, half.nextSeq)
+			log.Printf("%v current TSN:%d", key, half.currentTSN)
 		}
 	}
-}
-
-// Overlap strategies:
-//  - new packet overlaps with sent packets:
-//	1) discard new overlapping part
-//	2) overwrite old overlapped (TODO)
-//  - new packet overlaps existing queued packets:
-//	a) consider "age" by timestamp (TODO)
-//	b) consider "age" by being present
-//	Then
-//      1) discard new overlapping part
-//      2) overwrite queued part
-
-func (a *Assembler) checkOverlap(half *halfconnection, queue bool, ac AssemblerContext) {
-	var next *page
-	cur := half.last
-	bytes := a.cacheLP.bytes
-	start := a.cacheLP.seq
-	end := start.Add(len(bytes))
-
-	a.dump("before checkOverlap", half)
-
-	//          [s6           :           e6]
-	//   [s1:e1][s2:e2] -- [s3:e3] -- [s4:e4][s5:e5]
-	//             [s <--ds-- : --de--> e]
-	for cur != nil {
-
-		if *debugLog {
-			log.Printf("cur = %p (%s)\n", cur, cur)
-		}
-
-		// end < cur.start: continue (5)
-		if end.Difference(cur.seq) > 0 {
-			if *debugLog {
-				log.Printf("case 5\n")
-			}
-			next = cur
-			cur = cur.prev
-			continue
-		}
-
-		curEnd := cur.seq.Add(len(cur.bytes))
-		// start > cur.end: stop (1)
-		if start.Difference(curEnd) <= 0 {
-			if *debugLog {
-				log.Printf("case 1\n")
-			}
-			break
-		}
-
-		diffStart := start.Difference(cur.seq)
-		diffEnd := end.Difference(curEnd)
-
-		// end > cur.end && start < cur.start: drop (3)
-		if diffEnd <= 0 && diffStart >= 0 {
-			if *debugLog {
-				log.Printf("case 3\n")
-			}
-			if cur.isPacket() {
-				half.overlapPackets++
-			}
-			half.overlapBytes += len(cur.bytes)
-			// update links
-			if cur.prev != nil {
-				cur.prev.next = cur.next
-			} else {
-				half.first = cur.next
-			}
-			if cur.next != nil {
-				cur.next.prev = cur.prev
-			} else {
-				half.last = cur.prev
-			}
-			tmp := cur.prev
-			half.pages -= cur.release(a.pc)
-			cur = tmp
-			continue
-		}
-
-		// end > cur.end && start < cur.end: drop cur's end (2)
-		if diffEnd < 0 && start.Difference(curEnd) > 0 {
-			if *debugLog {
-				log.Printf("case 2\n")
-			}
-			cur.bytes = cur.bytes[:-start.Difference(cur.seq)]
-			break
-		} else
-
-		// start < cur.start && end > cur.start: drop cur's start (4)
-		if diffStart > 0 && end.Difference(cur.seq) < 0 {
-			if *debugLog {
-				log.Printf("case 4\n")
-			}
-			cur.bytes = cur.bytes[-end.Difference(cur.seq):]
-			cur.seq = cur.seq.Add(-end.Difference(cur.seq))
-			next = cur
-		} else
-
-		// end < cur.end && start > cur.start: replace bytes inside cur (6)
-		if diffEnd >= 0 && diffStart <= 0 {
-			if *debugLog {
-				log.Printf("case 6\n")
-			}
-			copy(cur.bytes[-diffStart:-diffStart+len(bytes)], bytes)
-			bytes = bytes[:0]
-		} else {
-			if *debugLog {
-				log.Printf("no overlap\n")
-			}
-			next = cur
-		}
-		cur = cur.prev
-	}
-
-	// Split bytes into pages, and insert in queue
-	a.cacheLP.bytes = bytes
-	a.cacheLP.seq = start
-	if len(bytes) > 0 && queue {
-		p, p2, numPages := a.cacheLP.convertToPages(a.pc, 0, ac)
-		half.queuedPackets++
-		half.queuedBytes += len(bytes)
-		half.pages += numPages
-		if cur != nil {
-			if *debugLog {
-				log.Printf("adding %s after %s", p, cur)
-			}
-			cur.next = p
-			p.prev = cur
-		} else {
-			if *debugLog {
-				log.Printf("adding %s as first", p)
-			}
-			half.first = p
-		}
-		if next != nil {
-			if *debugLog {
-				log.Printf("setting %s as next of new %s", next, p2)
-			}
-			p2.next = next
-			next.prev = p2
-		} else {
-			if *debugLog {
-				log.Printf("setting %s as last", p2)
-			}
-			half.last = p2
-		}
-	}
-	a.dump("After checkOverlap", half)
 }
 
 // Warning: this is a low-level dumper, i.e. a.ret or a.cacheSG might
@@ -944,34 +783,6 @@ func (a *Assembler) dump(text string, half *halfconnection) {
 	}
 }
 
-func (a *Assembler) overlapExisting(half *halfconnection, start, end Sequence, bytes []byte) ([]byte, Sequence) {
-	if half.nextSeq == invalidSequence {
-		// no start yet
-		return bytes, start
-	}
-	diff := start.Difference(half.nextSeq)
-	if diff == 0 {
-		return bytes, start
-	}
-	s := 0
-	e := len(bytes)
-	// TODO: depending on strategy, we might want to shrink half.saved if possible
-	if e != 0 {
-		if *debugLog {
-			log.Printf("Overlap detected: ignoring current packet's first %d bytes", diff)
-		}
-		half.overlapPackets++
-		half.overlapBytes += diff
-	}
-	s += diff
-	if s >= e {
-		// Completely included in sent
-		s = e
-	}
-	bytes = bytes[s:]
-	return bytes, half.nextSeq
-}
-
 // Prepare send or queue
 func (a *Assembler) handleBytes(bytes []byte, seq Sequence, half *halfconnection, start bool, end bool, action assemblerAction, ac AssemblerContext) assemblerAction {
 	a.cacheLP.bytes = bytes
@@ -981,7 +792,6 @@ func (a *Assembler) handleBytes(bytes []byte, seq Sequence, half *halfconnection
 	a.cacheLP.ac = ac
 
 	if action.queue {
-		a.checkOverlap(half, true, ac)
 		if (a.MaxBufferedPagesPerConnection > 0 && half.pages >= a.MaxBufferedPagesPerConnection) ||
 			(a.MaxBufferedPagesTotal > 0 && a.pc.used >= a.MaxBufferedPagesTotal) {
 			if *debugLog {
@@ -992,8 +802,6 @@ func (a *Assembler) handleBytes(bytes []byte, seq Sequence, half *halfconnection
 		}
 		a.dump("handleBytes after queue", half)
 	} else {
-		a.cacheLP.bytes, a.cacheLP.seq = a.overlapExisting(half, seq, seq.Add(len(bytes)), a.cacheLP.bytes)
-		a.checkOverlap(half, false, ac)
 		if len(a.cacheLP.bytes) != 0 || end || start {
 			a.ret = append(a.ret, &a.cacheLP)
 		}
@@ -1015,25 +823,17 @@ func (a *Assembler) setStatsToSG(half *halfconnection) {
 
 // Build the ScatterGather object, i.e. prepend saved bytes and
 // append continuous bytes.
-func (a *Assembler) buildSG(half *halfconnection) (bool, Sequence) {
-	// find if there are skipped bytes
-	skip := -1
-	if half.nextSeq != invalidSequence {
-		skip = half.nextSeq.Difference(a.ret[0].getSeq())
-	}
-	last := a.ret[0].getSeq().Add(a.ret[0].length())
+func (a *Assembler) buildSG(half *halfconnection) bool {
 	// Prepend saved bytes
 	saved := a.addPending(half, a.ret[0].getSeq())
 	// Append continuous bytes
-	nextSeq := a.addContiguous(half, last)
 	a.cacheSG.all = a.ret
 	a.cacheSG.Direction = half.dir
-	a.cacheSG.Skip = skip
 	a.cacheSG.saved = saved
 	a.cacheSG.toKeep = -1
 	a.setStatsToSG(half)
 	a.dump("after buildSG", half)
-	return a.ret[len(a.ret)-1].isEnd(), nextSeq
+	return a.ret[len(a.ret)-1].isEnd()
 }
 
 func (a *Assembler) cleanSG(half *halfconnection, ac AssemblerContext) {
@@ -1117,20 +917,17 @@ func (a *Assembler) cleanSG(half *halfconnection, ac AssemblerContext) {
 
 // sendToConnection sends the current values in a.ret to the connection, closing
 // the connection if the last thing sent had End set.
-func (a *Assembler) sendToConnection(conn *connection, half *halfconnection, ac AssemblerContext) Sequence {
+func (a *Assembler) sendToConnection(conn *connection, half *halfconnection, ac AssemblerContext) {
 	if *debugLog {
 		log.Printf("sendToConnection\n")
 	}
-	end, nextSeq := a.buildSG(half)
+	end := a.buildSG(half)
 	half.stream.ReassembledSG(&a.cacheSG, ac)
 	a.cleanSG(half, ac)
 	if end {
 		a.closeHalfConnection(conn, half)
 	}
-	if *debugLog {
-		log.Printf("after sendToConnection: nextSeq: %d\n", nextSeq)
-	}
-	return nextSeq
+	return
 }
 
 func (a *Assembler) addPending(half *halfconnection, firstSeq Sequence) int {
@@ -1162,42 +959,12 @@ func (a *Assembler) addPending(half *halfconnection, firstSeq Sequence) int {
 	return s
 }
 
-// addContiguous adds contiguous byte-sets to a connection.
-func (a *Assembler) addContiguous(half *halfconnection, lastSeq Sequence) Sequence {
-	page := half.first
-	if page == nil {
-		if *debugLog {
-			log.Printf("addContiguous(%d): no pages\n", lastSeq)
-		}
-		return lastSeq
-	}
-	if lastSeq == invalidSequence {
-		lastSeq = page.seq
-	}
-	for page != nil && lastSeq.Difference(page.seq) == 0 {
-		if *debugLog {
-			log.Printf("addContiguous: lastSeq: %d, first.seq=%d, page.seq=%d\n", half.nextSeq, half.first.seq, page.seq)
-		}
-		lastSeq = lastSeq.Add(len(page.bytes))
-		a.ret = append(a.ret, page)
-		half.first = page.next
-		if half.first == nil {
-			half.last = nil
-		}
-		if page.next != nil {
-			page.next.prev = nil
-		}
-		page = page.next
-	}
-	return lastSeq
-}
-
 // skipFlush skips the first set of bytes we're waiting for and returns the
 // first set of bytes we have.  If we have no bytes saved, it closes the
 // connection.
 func (a *Assembler) skipFlush(conn *connection, half *halfconnection) {
 	if *debugLog {
-		log.Printf("skipFlush %v\n", half.nextSeq)
+		log.Printf("skipFlush %v\n", half.currentTSN)
 	}
 	// Well, it's embarassing it there is still something in half.saved
 	// FIXME: change API to give back saved + new/no packets
@@ -1207,10 +974,7 @@ func (a *Assembler) skipFlush(conn *connection, half *halfconnection) {
 	}
 	a.ret = a.ret[:0]
 	a.addNextFromConn(half)
-	nextSeq := a.sendToConnection(conn, half, a.ret[0].assemblerContext())
-	if nextSeq != invalidSequence {
-		half.nextSeq = nextSeq
-	}
+	a.sendToConnection(conn, half, a.ret[0].assemblerContext())
 }
 
 func (a *Assembler) closeHalfConnection(conn *connection, half *halfconnection) {
@@ -1237,7 +1001,7 @@ func (a *Assembler) addNextFromConn(conn *halfconnection) {
 		return
 	}
 	if *debugLog {
-		log.Printf("   adding from conn (%v, %v) %v (%d)\n", conn.first.seq, conn.nextSeq, conn.nextSeq-conn.first.seq, len(conn.first.bytes))
+		log.Printf("   adding from conn (%v, %v) %v (%d)\n", conn.first.seq, conn.currentTSN, conn.currentTSN-conn.first.seq, len(conn.first.bytes))
 	}
 	a.ret = append(a.ret, conn.first)
 	conn.first = conn.first.next
