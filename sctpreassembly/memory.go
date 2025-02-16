@@ -144,7 +144,7 @@ func (p *StreamPool) connections() []*connection {
 	return conns
 }
 
-func (p *StreamPool) newConnection(k key, s Stream, ts time.Time) (c *connection, h *halfconnection, r *halfconnection) {
+func (p *StreamPool) newConnection(k key, s Stream, ts time.Time) (c *connection, h *halfconnection) {
 	if *memLog {
 		p.newConnectionCount++
 		if p.newConnectionCount&0x7FFF == 0 {
@@ -157,44 +157,44 @@ func (p *StreamPool) newConnection(k key, s Stream, ts time.Time) (c *connection
 	index := len(p.free) - 1
 	c, p.free = p.free[index], p.free[:index]
 	c.reset(k, s, ts)
-	return c, &c.c2s, &c.s2c
+	return c, &c.c2s
 }
 
-func (p *StreamPool) getHalf(k key) (*connection, *halfconnection, *halfconnection) {
+func (p *StreamPool) getHalf(k key) (*connection, *halfconnection) {
 	conn := p.conns[k]
 	if conn != nil {
-		return conn, &conn.c2s, &conn.s2c
+		return conn, &conn.c2s
 	}
 	rk := k.Reverse()
 	conn = p.conns[rk]
 	if conn != nil {
-		return conn, &conn.s2c, &conn.c2s
+		return conn, &conn.s2c
 	}
-	return nil, nil, nil
+	return nil, nil
 }
 
 // getConnection returns a connection.  If end is true and a connection
 // does not already exist, returns nil.  This allows us to check for a
 // connection without actually creating one if it doesn't already exist.
-func (p *StreamPool) getConnection(k key, end bool, ts time.Time, sctp *layers.SCTP, ac AssemblerContext) (*connection, *halfconnection, *halfconnection) {
+func (p *StreamPool) getConnection(k key, end bool, ts time.Time, sctp *layers.SCTP, ac AssemblerContext) (*connection, *halfconnection) {
 	p.mu.RLock()
-	conn, half, rev := p.getHalf(k)
+	conn, half := p.getHalf(k)
 	p.mu.RUnlock()
 	if end || conn != nil {
-		return conn, half, rev
+		return conn, half
 	}
 	s := p.factory.New(k[0], k[1], sctp, ac)
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	conn, half, rev = p.newConnection(k, s, ts)
-	conn2, half2, rev2 := p.getHalf(k)
+	conn, half = p.newConnection(k, s, ts)
+	conn2, half2 := p.getHalf(k)
 	if conn2 != nil {
 		if conn2.key != k {
 			panic("FIXME: other dir added in the meantime...")
 		}
 		// FIXME: delete s ?
-		return conn2, half2, rev2
+		return conn2, half2
 	}
 	p.conns[k] = conn
-	return conn, half, rev
+	return conn, half
 }
