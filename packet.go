@@ -88,6 +88,8 @@ type CaptureInfo struct {
 	VlanID uint16
 	// Added for Kubeshark, Dot1Q layer existence
 	Dot1Q bool
+	// To control packet release in zer-copy operations
+	Done  chan struct{}
 }
 
 // PacketMetadata contains metadata for a packet.
