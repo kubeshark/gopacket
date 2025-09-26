@@ -88,6 +88,7 @@ type CaptureInfo struct {
 	VlanID uint16
 	// Added for Kubeshark, Dot1Q layer existence
 	Dot1Q bool
+	Done  chan struct{}
 }
 
 // PacketMetadata contains metadata for a packet.
@@ -518,6 +519,7 @@ func (p *eagerPacket) NextDecoder(next Decoder) error {
 	// Since we're eager, immediately call the next decoder.
 	return next.Decode(d, p)
 }
+
 func (p *eagerPacket) initialDecode(dec Decoder) {
 	defer p.recoverDecodeError()
 	err := dec.Decode(p.data, p)
@@ -525,24 +527,31 @@ func (p *eagerPacket) initialDecode(dec Decoder) {
 		p.addFinalDecodeError(err, nil)
 	}
 }
+
 func (p *eagerPacket) LinkLayer() LinkLayer {
 	return p.link
 }
+
 func (p *eagerPacket) NetworkLayer() NetworkLayer {
 	return p.network
 }
+
 func (p *eagerPacket) TransportLayer() TransportLayer {
 	return p.transport
 }
+
 func (p *eagerPacket) ApplicationLayer() ApplicationLayer {
 	return p.application
 }
+
 func (p *eagerPacket) ErrorLayer() ErrorLayer {
 	return p.failure
 }
+
 func (p *eagerPacket) Layers() []Layer {
 	return p.layers
 }
+
 func (p *eagerPacket) Layer(t LayerType) Layer {
 	for _, l := range p.layers {
 		if l.LayerType() == t {
@@ -551,6 +560,7 @@ func (p *eagerPacket) Layer(t LayerType) Layer {
 	}
 	return nil
 }
+
 func (p *eagerPacket) LayerClass(lc LayerClass) Layer {
 	for _, l := range p.layers {
 		if lc.Contains(l.LayerType()) {
@@ -610,6 +620,7 @@ func (p *lazyPacket) NextDecoder(next Decoder) error {
 	p.next = next
 	return nil
 }
+
 func (p *lazyPacket) decodeNextLayer() {
 	if p.next == nil {
 		return
@@ -631,42 +642,49 @@ func (p *lazyPacket) decodeNextLayer() {
 		p.addFinalDecodeError(err, nil)
 	}
 }
+
 func (p *lazyPacket) LinkLayer() LinkLayer {
 	for p.link == nil && p.next != nil {
 		p.decodeNextLayer()
 	}
 	return p.link
 }
+
 func (p *lazyPacket) NetworkLayer() NetworkLayer {
 	for p.network == nil && p.next != nil {
 		p.decodeNextLayer()
 	}
 	return p.network
 }
+
 func (p *lazyPacket) TransportLayer() TransportLayer {
 	for p.transport == nil && p.next != nil {
 		p.decodeNextLayer()
 	}
 	return p.transport
 }
+
 func (p *lazyPacket) ApplicationLayer() ApplicationLayer {
 	for p.application == nil && p.next != nil {
 		p.decodeNextLayer()
 	}
 	return p.application
 }
+
 func (p *lazyPacket) ErrorLayer() ErrorLayer {
 	for p.failure == nil && p.next != nil {
 		p.decodeNextLayer()
 	}
 	return p.failure
 }
+
 func (p *lazyPacket) Layers() []Layer {
 	for p.next != nil {
 		p.decodeNextLayer()
 	}
 	return p.layers
 }
+
 func (p *lazyPacket) Layer(t LayerType) Layer {
 	for _, l := range p.layers {
 		if l.LayerType() == t {
@@ -685,6 +703,7 @@ func (p *lazyPacket) Layer(t LayerType) Layer {
 	}
 	return nil
 }
+
 func (p *lazyPacket) LayerClass(lc LayerClass) Layer {
 	for _, l := range p.layers {
 		if lc.Contains(l.LayerType()) {
