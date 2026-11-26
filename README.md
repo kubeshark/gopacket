@@ -10,3 +10,12 @@ Minimum Go version required is 1.5 except for pcapgo/EthernetHandle, afpacket, a
 
 Originally forked from the gopcap project written by Andreas
 Krennmair <ak@synflood.at> (http://github.com/akrennmair/gopcap).
+
+## Selective TCP flushing
+
+`reassembly.Assembler.FlushWithOptionsIf` applies flush and close thresholds only
+to streams accepted by its predicate. Excluded streams remain unchanged; a nil
+predicate behaves like `FlushWithOptions`. Callers must serialize assembler access,
+and predicates must not call back into the assembler.
+
+The public-API contract tests run with `go test -race ./integration/reassembly`.

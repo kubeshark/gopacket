@@ -1290,12 +1290,21 @@ type FlushOptions struct {
 // Returns the number of connections flushed, and of those, the number closed
 // because of the flush.
 func (a *Assembler) FlushWithOptions(opt FlushOptions) (flushed, closed int) {
+	return a.FlushWithOptionsIf(opt, nil)
+}
+
+// FlushWithOptionsIf selects streams under their lock (nil selects all); include must not reenter the assembler.
+func (a *Assembler) FlushWithOptionsIf(opt FlushOptions, include func(Stream) bool) (flushed, closed int) {
 	conns := a.connPool.connections()
 	closes := 0
 	flushes := 0
 	for _, conn := range conns {
 		remove := false
 		conn.mu.Lock()
+		if include != nil && !include(conn.c2s.stream) {
+			conn.mu.Unlock()
+			continue
+		}
 		for _, half := range []*halfconnection{&conn.s2c, &conn.c2s} {
 			flushed, closed := a.flushClose(conn, half, opt.T, opt.TC)
 			if flushed {
